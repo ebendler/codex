@@ -9,6 +9,9 @@
   "engines": {
     "node": ">=16"
   },
+  "dependencies": {
+    "@devcontainers/cli": "^0.80.3"
+  },
   "files": [
     "bin",
     "vendor"

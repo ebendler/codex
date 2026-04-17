@@ -37,6 +37,11 @@ alias(
 
 exports_files([
     "AGENTS.md",
+    ".devcontainer/Dockerfile.secure",
+    ".devcontainer/devcontainer.secure.json",
+    ".devcontainer/init-firewall.sh",
+    ".devcontainer/post_install.py",
+    ".devcontainer/post-start.sh",
     "workspace_root_test_launcher.bat.tpl",
     "workspace_root_test_launcher.sh.tpl",
 ])

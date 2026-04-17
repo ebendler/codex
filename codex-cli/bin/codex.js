@@ -159,6 +159,10 @@ function detectPackageManager() {
 }
 
 const additionalDirs = [];
+const nodeModulesBinDir = path.join(__dirname, "..", "node_modules", ".bin");
+if (existsSync(nodeModulesBinDir)) {
+  additionalDirs.push(nodeModulesBinDir);
+}
 const pathDir = path.join(archRoot, "path");
 if (existsSync(pathDir)) {
   additionalDirs.push(pathDir);

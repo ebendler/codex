@@ -1725,6 +1725,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "which 8.0.0",
 ]
 
 [[package]]

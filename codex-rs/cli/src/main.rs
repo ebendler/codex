@@ -38,12 +38,14 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
+mod devcontainer_cmd;
 mod marketplace_cmd;
 mod mcp_cmd;
 mod responses_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::devcontainer_cmd::DevcontainerCli;
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
 use crate::responses_cmd::ResponsesCommand;
@@ -113,6 +115,9 @@ enum Subcommand {
 
     /// Manage Codex plugins.
     Plugin(PluginCli),
+
+    /// Materialize and launch the Codex secure devcontainer.
+    Devcontainer(DevcontainerCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
@@ -758,6 +763,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     marketplace_cli.run().await?;
                 }
             }
+        }
+        Some(Subcommand::Devcontainer(devcontainer_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "devcontainer",
+            )?;
+            devcontainer_cli.run()?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => {
             let AppServerCommand {

@@ -22,13 +22,22 @@ Use `devcontainer.secure.json` when you want a stricter runtime profile for runn
 
 This profile keeps the stricter networking isolated to the customer path instead of changing the default Codex contributor container.
 
-Start it from the CLI with:
+Codex can materialize these files into `.codex-devcontainer`, start the secure profile, and optionally forward a prompt into Codex inside the container:
 
 ```bash
-devcontainer up --workspace-folder . --config .devcontainer/devcontainer.secure.json
+codex devcontainer
+codex devcontainer make me a sandwich
 ```
 
-In VS Code, choose **Dev Containers: Open Folder in Container...** and select `.devcontainer/devcontainer.secure.json`.
+Use `--workspace-folder /path/to/repo` to target another checkout, `--write-only` to only scaffold the `.codex-devcontainer` files, and `--force` to overwrite conflicting secure-profile files.
+
+You can still start it manually from the Dev Containers CLI with:
+
+```bash
+devcontainer up --workspace-folder . --config .codex-devcontainer/devcontainer.secure.json
+```
+
+In VS Code, choose **Dev Containers: Open Folder in Container...** and select `.codex-devcontainer/devcontainer.secure.json`.
 
 ## Docker
 
