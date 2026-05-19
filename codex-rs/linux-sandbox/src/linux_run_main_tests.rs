@@ -5,6 +5,8 @@ use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
 use crate::linux_run_main::wait_for_bwrap_child;
 #[cfg(test)]
+use codex_protocol::models::HardwarePermissions;
+#[cfg(test)]
 use codex_protocol::models::PermissionProfile;
 #[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -83,6 +85,9 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "--unshare-pid".to_string(),
             "--proc".to_string(),
             "/proc".to_string(),
+            "--setenv".to_string(),
+            "SANDBOX_RUNTIME".to_string(),
+            "bwrap".to_string(),
             "--argv0".to_string(),
             "codex-linux-sandbox".to_string(),
             "--".to_string(),
@@ -199,6 +204,54 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
 }
 
 #[test]
+fn build_bwrap_argv_includes_cuda_device_binds_when_profile_enables_cuda() {
+    let file_system_sandbox_policy = read_only_file_system_policy();
+    let argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &file_system_sandbox_policy,
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+            hardware_permissions: HardwarePermissions { cuda: true },
+            ..Default::default()
+        },
+    )
+    .expect("build bwrap argv")
+    .args;
+
+    assert!(
+        argv.windows(3)
+            .any(|window| { window == ["--dev-bind-try", "/dev/nvidiactl", "/dev/nvidiactl",] })
+    );
+    assert!(!argv.iter().any(|arg| arg.contains("nvidia-modeset")));
+}
+
+#[test]
+fn build_bwrap_argv_sets_sandbox_runtime_marker() {
+    let file_system_sandbox_policy = read_only_file_system_policy();
+    let argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &file_system_sandbox_policy,
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+            ..Default::default()
+        },
+    )
+    .expect("build bwrap argv")
+    .args;
+
+    assert!(
+        argv.windows(3)
+            .any(|window| window == ["--setenv", "SANDBOX_RUNTIME", "bwrap"])
+    );
+}
+
+#[test]
 fn proxy_only_mode_takes_precedence_over_full_network_policy() {
     let mode = bwrap_network_mode(
         NetworkSandboxPolicy::Enabled,
@@ -268,6 +321,7 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         Path::new("/"),
         &FileSystemSandboxPolicy::unrestricted(),
         mode,
+        HardwarePermissions::default(),
     )
     .expect("build preflight argv")
     .args;

@@ -951,6 +951,15 @@
       ],
       "type": "object"
     },
+    "HardwarePermissionsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "cuda": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "History": {
       "additionalProperties": false,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
@@ -2132,6 +2141,9 @@
         },
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
+        "hardware": {
+          "$ref": "#/definitions/HardwarePermissionsToml"
         },
         "network": {
           "$ref": "#/definitions/NetworkToml"

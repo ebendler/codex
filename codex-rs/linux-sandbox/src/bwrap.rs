@@ -26,6 +26,7 @@ use std::process::Command;
 
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
+use codex_protocol::models::HardwarePermissions;
 use codex_protocol::permissions::is_protected_metadata_name;
 use codex_protocol::protocol::FileSystemAccessMode;
 use codex_protocol::protocol::FileSystemPath;
@@ -54,6 +55,8 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 ];
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
+const SANDBOX_RUNTIME_ENV_VAR: &str = "SANDBOX_RUNTIME";
+const BWRAP_SANDBOX_RUNTIME: &str = "bwrap";
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +73,8 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
+    /// Hardware devices that should be exposed inside the sandbox.
+    pub hardware_permissions: HardwarePermissions,
 }
 
 impl Default for BwrapOptions {
@@ -78,6 +83,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
+            hardware_permissions: HardwarePermissions::default(),
         }
     }
 }
@@ -271,11 +277,14 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
+    ];
+    append_cuda_device_bind_args(&mut args, Path::new("/dev"), options.hardware_permissions);
+    args.extend([
         // Always enter a fresh user namespace so root inside a container does
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
-    ];
+    ]);
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -283,6 +292,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         args.push("--proc".to_string());
         args.push("/proc".to_string());
     }
+    append_sandbox_runtime_env_args(&mut args);
     args.push("--".to_string());
     args.extend(command);
     BwrapArgs {
@@ -318,6 +328,7 @@ fn create_bwrap_flags(
     args.push("--new-session".to_string());
     args.push("--die-with-parent".to_string());
     args.extend(filesystem_args);
+    append_cuda_device_bind_args(&mut args, Path::new("/dev"), options.hardware_permissions);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
@@ -338,6 +349,7 @@ fn create_bwrap_flags(
         args.push("--chdir".to_string());
         args.push(path_to_string(normalized_command_cwd.as_path()));
     }
+    append_sandbox_runtime_env_args(&mut args);
     args.push("--".to_string());
     args.extend(command);
     Ok(BwrapArgs {
@@ -939,6 +951,59 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+fn append_sandbox_runtime_env_args(args: &mut Vec<String>) {
+    args.push("--setenv".to_string());
+    args.push(SANDBOX_RUNTIME_ENV_VAR.to_string());
+    args.push(BWRAP_SANDBOX_RUNTIME.to_string());
+}
+
+fn append_cuda_device_bind_args(
+    args: &mut Vec<String>,
+    dev_root: &Path,
+    hardware_permissions: HardwarePermissions,
+) {
+    if !hardware_permissions.cuda {
+        return;
+    }
+
+    for (source, destination) in cuda_device_bind_mounts(dev_root) {
+        args.push("--dev-bind-try".to_string());
+        args.push(path_to_string(&source));
+        args.push(path_to_string(&destination));
+    }
+}
+
+fn cuda_device_bind_mounts(dev_root: &Path) -> Vec<(PathBuf, PathBuf)> {
+    [
+        "nvidiactl".to_string(),
+        "nvidia-uvm".to_string(),
+        "nvidia-uvm-tools".to_string(),
+        "nvidia-caps".to_string(),
+    ]
+    .into_iter()
+    .chain(discover_numbered_nvidia_devices(dev_root))
+    .map(|name| (dev_root.join(&name), Path::new("/dev").join(name)))
+    .collect()
+}
+
+fn discover_numbered_nvidia_devices(dev_root: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dev_root) else {
+        return Vec::new();
+    };
+    let mut devices = entries
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            let index = name.strip_prefix("nvidia")?;
+            if index.is_empty() || !index.chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
+            }
+            Some((index.parse::<u64>().ok()?, name))
+        })
+        .collect::<Vec<_>>();
+    devices.sort_by_key(|(index, _)| *index);
+    devices.into_iter().map(|(_, name)| name).collect()
+}
+
 fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
@@ -1328,6 +1393,7 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    use codex_protocol::models::HardwarePermissions;
     use codex_protocol::protocol::FileSystemAccessMode;
     use codex_protocol::protocol::FileSystemPath;
     use codex_protocol::protocol::FileSystemSandboxEntry;
@@ -1405,10 +1471,100 @@ mod tests {
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),
+                "--setenv".to_string(),
+                "SANDBOX_RUNTIME".to_string(),
+                "bwrap".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn cuda_hardware_adds_compute_only_device_binds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let dev_root = temp_dir.path();
+        std::fs::write(dev_root.join("nvidia10"), "").expect("write nvidia10");
+        std::fs::write(dev_root.join("nvidia2"), "").expect("write nvidia2");
+        std::fs::write(dev_root.join("nvidia0"), "").expect("write nvidia0");
+        std::fs::write(dev_root.join("nvidia-modeset"), "").expect("write modeset");
+        std::fs::create_dir(dev_root.join("dri")).expect("create dri");
+        let mut args = Vec::new();
+
+        append_cuda_device_bind_args(&mut args, dev_root, HardwarePermissions { cuda: true });
+
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidiactl")),
+            "/dev/nvidiactl"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia-uvm")),
+            "/dev/nvidia-uvm"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia-uvm-tools")),
+            "/dev/nvidia-uvm-tools"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia-caps")),
+            "/dev/nvidia-caps"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia0")),
+            "/dev/nvidia0"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia2")),
+            "/dev/nvidia2"
+        ));
+        assert!(has_bwrap_triplet(
+            &args,
+            "--dev-bind-try",
+            &path_to_string(&dev_root.join("nvidia10")),
+            "/dev/nvidia10"
+        ));
+        assert!(!args.iter().any(|arg| arg.contains("nvidia-modeset")));
+        assert!(!args.iter().any(|arg| arg.contains("/dev/dri")));
+        let numbered_destinations = args
+            .windows(3)
+            .filter(|window| window[0] == "--dev-bind-try")
+            .map(|window| window[2].as_str())
+            .filter(|destination| {
+                destination
+                    .strip_prefix("/dev/nvidia")
+                    .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            numbered_destinations,
+            vec!["/dev/nvidia0", "/dev/nvidia2", "/dev/nvidia10"]
+        );
+    }
+
+    #[test]
+    fn cuda_hardware_disabled_adds_no_device_binds() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut args = Vec::new();
+
+        append_cuda_device_bind_args(
+            &mut args,
+            temp_dir.path(),
+            HardwarePermissions { cuda: false },
+        );
+
+        assert!(args.is_empty());
     }
 
     #[test]
@@ -2689,6 +2845,11 @@ mod tests {
                 .any(|window| window == ["--remount-ro", path.as_str()]),
             "expected read-only remount for {path}: {args:#?}"
         );
+    }
+
+    fn has_bwrap_triplet(args: &[String], flag: &str, source: &str, destination: &str) -> bool {
+        args.windows(3)
+            .any(|window| window == [flag, source, destination])
     }
 
     fn synthetic_mount_target_paths(args: &BwrapArgs) -> Vec<PathBuf> {

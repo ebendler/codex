@@ -26,6 +26,7 @@ use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::models::HardwarePermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
@@ -222,6 +223,7 @@ pub fn run_main() -> ! {
             } else {
                 None
             };
+        let hardware_permissions = permission_profile.hardware_permissions();
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -230,14 +232,15 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            network_sandbox_policy,
+            network_mode,
+            hardware_permissions,
             inner,
             !no_proc,
-            allow_network_for_proxy,
         );
     }
 
@@ -318,12 +321,11 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
+    network_mode: BwrapNetworkMode,
+    hardware_permissions: HardwarePermissions,
     inner: Vec<String>,
     mount_proc: bool,
-    allow_network_for_proxy: bool,
 ) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
@@ -333,6 +335,7 @@ fn run_bwrap_with_proc_fallback(
             command_cwd,
             file_system_sandbox_policy,
             network_mode,
+            hardware_permissions,
         )
         .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
@@ -344,6 +347,7 @@ fn run_bwrap_with_proc_fallback(
     let options = BwrapOptions {
         mount_proc,
         network_mode,
+        hardware_permissions,
         ..Default::default()
     };
     let mut bwrap_args = build_bwrap_argv(
@@ -446,12 +450,14 @@ fn preflight_proc_mount_support(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    hardware_permissions: HardwarePermissions,
 ) -> CodexResult<bool> {
     let preflight_argv = build_preflight_bwrap_argv(
         sandbox_policy_cwd,
         command_cwd,
         file_system_sandbox_policy,
         network_mode,
+        hardware_permissions,
     )?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     Ok(!is_proc_mount_failure(stderr.as_str()))
@@ -462,6 +468,7 @@ fn build_preflight_bwrap_argv(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    hardware_permissions: HardwarePermissions,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
@@ -472,6 +479,7 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
+            hardware_permissions,
             ..Default::default()
         },
     )

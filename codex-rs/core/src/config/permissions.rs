@@ -28,6 +28,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::HardwarePermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -214,6 +215,7 @@ fn extensible_builtin_parent_profile_marker(profile_name: &str) -> Option<Permis
         workspace_roots: None,
         filesystem: None,
         network: None,
+        hardware: None,
     })
 }
 
@@ -238,12 +240,18 @@ pub(crate) fn network_proxy_config_for_profile_selection(
     ))
 }
 
+pub(crate) struct CompiledPermissionProfile {
+    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub network_sandbox_policy: NetworkSandboxPolicy,
+    pub hardware_permissions: HardwarePermissions,
+}
+
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+) -> io::Result<CompiledPermissionProfile> {
     let ResolvedPermissionProfileToml {
         profile,
         inherited_profile_names,
@@ -316,7 +324,18 @@ pub(crate) fn compile_permission_profile(
     }
     let network_sandbox_policy =
         compile_network_sandbox_policy(profile.network.as_ref(), base_network_sandbox_policy);
-    Ok((file_system_sandbox_policy, network_sandbox_policy))
+    let hardware_permissions = HardwarePermissions {
+        cuda: profile
+            .hardware
+            .as_ref()
+            .and_then(|hardware| hardware.cuda)
+            .unwrap_or(false),
+    };
+    Ok(CompiledPermissionProfile {
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        hardware_permissions,
+    })
 }
 
 pub(crate) fn compile_permission_profile_selection(
@@ -325,9 +344,15 @@ pub(crate) fn compile_permission_profile_selection(
     workspace_write: Option<&SandboxWorkspaceWrite>,
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+) -> io::Result<CompiledPermissionProfile> {
     if let Some(permission_profile) = builtin_permission_profile(profile_name, workspace_write) {
-        return Ok(permission_profile.to_runtime_permissions());
+        let (file_system_sandbox_policy, network_sandbox_policy) =
+            permission_profile.to_runtime_permissions();
+        return Ok(CompiledPermissionProfile {
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            hardware_permissions: HardwarePermissions::default(),
+        });
     }
     reject_unknown_builtin_permission_profile(profile_name)?;
 

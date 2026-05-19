@@ -210,6 +210,20 @@ impl NetworkPermissions {
     }
 }
 
+#[derive(
+    Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
+)]
+pub struct HardwarePermissions {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cuda: bool,
+}
+
+impl HardwarePermissions {
+    pub fn is_empty(&self) -> bool {
+        !self.cuda
+    }
+}
+
 /// Partial permission overlay used for per-command requests and approved
 /// session/turn grants.
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -317,6 +331,9 @@ pub enum PermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default, skip_serializing_if = "HardwarePermissions::is_empty")]
+        #[ts(optional, as = "Option<_>")]
+        hardware: HardwarePermissions,
     },
     /// Do not apply an outer sandbox.
     Disabled,
@@ -367,6 +384,7 @@ impl Default for PermissionProfile {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            hardware: HardwarePermissions::default(),
         }
     }
 }
@@ -385,6 +403,7 @@ impl PermissionProfile {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            hardware: HardwarePermissions::default(),
         }
     }
 
@@ -421,6 +440,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+            hardware: HardwarePermissions::default(),
         }
     }
 
@@ -432,6 +452,7 @@ impl PermissionProfile {
             Self::Managed {
                 file_system,
                 network,
+                hardware,
             } => {
                 let file_system = file_system
                     .to_sandbox_policy()
@@ -439,6 +460,7 @@ impl PermissionProfile {
                 Self::Managed {
                     file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
                     network,
+                    hardware,
                 }
             }
             Self::Disabled => Self::Disabled,
@@ -481,6 +503,7 @@ impl PermissionProfile {
                         file_system_sandbox_policy,
                     ),
                     network: network_sandbox_policy,
+                    hardware: HardwarePermissions::default(),
                 }
             }
         }
@@ -525,11 +548,35 @@ impl PermissionProfile {
         }
     }
 
+    pub fn hardware_permissions(&self) -> HardwarePermissions {
+        match self {
+            Self::Managed { hardware, .. } => *hardware,
+            Self::Disabled | Self::External { .. } => HardwarePermissions::default(),
+        }
+    }
+
+    pub fn with_hardware_permissions(self, hardware: HardwarePermissions) -> Self {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+                ..
+            } => Self::Managed {
+                file_system,
+                network,
+                hardware,
+            },
+            Self::Disabled => Self::Disabled,
+            Self::External { network } => Self::External { network },
+        }
+    }
+
     pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
         match self {
             Self::Managed {
                 file_system,
                 network,
+                ..
             } => file_system
                 .to_sandbox_policy()
                 .to_legacy_sandbox_policy(*network, cwd),
@@ -559,6 +606,8 @@ enum TaggedPermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default, skip_serializing_if = "HardwarePermissions::is_empty")]
+        hardware: HardwarePermissions,
     },
     Disabled,
     #[serde(rename_all = "snake_case")]
@@ -573,9 +622,11 @@ impl From<TaggedPermissionProfile> for PermissionProfile {
             TaggedPermissionProfile::Managed {
                 file_system,
                 network,
+                hardware,
             } => Self::Managed {
                 file_system,
                 network,
+                hardware,
             },
             TaggedPermissionProfile::Disabled => Self::Disabled,
             TaggedPermissionProfile::External { network } => Self::External { network },
@@ -1842,9 +1893,77 @@ mod tests {
                     glob_scan_max_depth: NonZeroUsize::new(2),
                 },
                 network: NetworkSandboxPolicy::Enabled,
+                hardware: HardwarePermissions::default(),
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn permission_profile_managed_hardware_defaults_to_empty() -> Result<()> {
+        let managed = serde_json::json!({
+            "type": "managed",
+            "file_system": {
+                "type": "restricted",
+                "entries": [],
+            },
+            "network": "restricted",
+        });
+
+        let permission_profile: PermissionProfile = serde_json::from_value(managed)?;
+
+        assert_eq!(
+            permission_profile.hardware_permissions(),
+            HardwarePermissions::default()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permission_profile_round_trip_preserves_cuda_hardware() -> Result<()> {
+        let permission_profile = PermissionProfile::read_only()
+            .with_hardware_permissions(HardwarePermissions { cuda: true });
+
+        let round_trip: PermissionProfile =
+            serde_json::from_str(&serde_json::to_string(&permission_profile)?)?;
+
+        assert_eq!(round_trip, permission_profile);
+        assert_eq!(
+            round_trip.hardware_permissions(),
+            HardwarePermissions { cuda: true }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permission_profile_serializes_default_hardware_as_absent() -> Result<()> {
+        let permission_profile = PermissionProfile::read_only()
+            .with_hardware_permissions(HardwarePermissions { cuda: false });
+
+        let serialized = serde_json::to_value(permission_profile)?;
+
+        assert_eq!(serialized.get("hardware"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn materializing_workspace_roots_preserves_cuda_hardware() {
+        let workspace_root = AbsolutePathBuf::try_from(PathBuf::from(if cfg!(windows) {
+            r"C:\tmp\workspace"
+        } else {
+            "/tmp/workspace"
+        }))
+        .expect("absolute path");
+        let permission_profile = PermissionProfile::workspace_write()
+            .with_hardware_permissions(HardwarePermissions { cuda: true });
+
+        let materialized =
+            permission_profile.materialize_project_roots_with_workspace_roots(&[workspace_root]);
+
+        assert_eq!(
+            materialized.hardware_permissions(),
+            HardwarePermissions { cuda: true }
+        );
     }
 
     #[test]
@@ -1929,6 +2048,7 @@ mod tests {
             PermissionProfile::Managed {
                 file_system: ManagedFileSystemPermissions::Unrestricted,
                 network: NetworkSandboxPolicy::Restricted,
+                hardware: HardwarePermissions::default(),
             },
             "the legacy ExternalSandbox projection must not hide a split unrestricted filesystem policy"
         );

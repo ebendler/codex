@@ -2777,7 +2777,8 @@ impl Config {
                     permission_profile.enforcement(),
                     &materialized_file_system_sandbox_policy,
                     network_sandbox_policy,
-                );
+                )
+                .with_hardware_permissions(permission_profile.hardware_permissions());
             let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
                 &materialized_permission_profile,
                 &materialized_file_system_sandbox_policy,
@@ -2791,7 +2792,8 @@ impl Config {
                     permission_profile.enforcement(),
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
-                );
+                )
+                .with_hardware_permissions(permission_profile.hardware_permissions());
             }
             (
                 configured_network_proxy_config,
@@ -2815,14 +2817,17 @@ impl Config {
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
             )?;
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile_selection(
-                    effective_permission_selection.profiles.as_ref(),
-                    default_permissions,
-                    builtin_workspace_write_settings,
-                    resolved_cwd.as_path(),
-                    &mut startup_warnings,
-                )?;
+            let compiled_permission_profile = compile_permission_profile_selection(
+                effective_permission_selection.profiles.as_ref(),
+                default_permissions,
+                builtin_workspace_write_settings,
+                resolved_cwd.as_path(),
+                &mut startup_warnings,
+            )?;
+            let mut file_system_sandbox_policy =
+                compiled_permission_profile.file_system_sandbox_policy;
+            let network_sandbox_policy = compiled_permission_profile.network_sandbox_policy;
+            let hardware_permissions = compiled_permission_profile.hardware_permissions;
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
@@ -2846,6 +2851,7 @@ impl Config {
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
                 )
+                .with_hardware_permissions(hardware_permissions)
             };
             let materialized_file_system_sandbox_policy = file_system_sandbox_policy
                 .clone()
@@ -2855,7 +2861,8 @@ impl Config {
                     permission_profile.enforcement(),
                     &materialized_file_system_sandbox_policy,
                     network_sandbox_policy,
-                );
+                )
+                .with_hardware_permissions(permission_profile.hardware_permissions());
             let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
                 &materialized_permission_profile,
                 &materialized_file_system_sandbox_policy,
@@ -2869,7 +2876,8 @@ impl Config {
                     permission_profile.enforcement(),
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
-                );
+                )
+                .with_hardware_permissions(permission_profile.hardware_permissions());
             }
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
@@ -2949,7 +2957,8 @@ impl Config {
                     permission_profile.enforcement(),
                     &file_system_sandbox_policy,
                     network_sandbox_policy,
-                );
+                )
+                .with_hardware_permissions(permission_profile.hardware_permissions());
             }
             (
                 configured_network_proxy_config,
@@ -3433,7 +3442,8 @@ impl Config {
             effective_permission_profile.enforcement(),
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
-        );
+        )
+        .with_hardware_permissions(effective_permission_profile.hardware_permissions());
         constrained_permission_profile
             .value
             .set(effective_permission_profile)

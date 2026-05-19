@@ -75,6 +75,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                             entries: BTreeMap::new(),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -448,6 +449,7 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
                     }),
                     filesystem: None,
                     network: None,
+                    hardware: None,
                 },
             )]),
         }),
@@ -544,7 +546,7 @@ fn glob_scan_max_depth_must_be_positive() {
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
     let cwd = TempDir::new()?;
     let mut startup_warnings = Vec::new();
-    let (file_system_policy, _) = compile_permission_profile(
+    let compiled_profile = compile_permission_profile(
         &PermissionsToml {
             entries: BTreeMap::from([(
                 "workspace".to_string(),
@@ -563,6 +565,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                         )]),
                     }),
                     network: None,
+                    hardware: None,
                 },
             )]),
         },
@@ -570,6 +573,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
         cwd.path(),
         &mut startup_warnings,
     )?;
+    let file_system_policy = compiled_profile.file_system_sandbox_policy;
 
     assert_eq!(
         file_system_policy,

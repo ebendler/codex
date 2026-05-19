@@ -24,6 +24,7 @@ use codex_config::config_toml::ToolsToml;
 use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
+use codex_config::permissions_toml::HardwarePermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
 use codex_config::permissions_toml::NetworkMitmActionToml;
@@ -79,6 +80,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::HardwarePermissions;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -773,6 +775,9 @@ action = ["strip_auth"]
 
 [permissions.dev.network.mitm.actions.strip_auth]
 strip_request_headers = ["authorization"]
+
+[permissions.dev.hardware]
+cuda = true
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
@@ -852,6 +857,7 @@ strip_request_headers = ["authorization"]
                             )])),
                         }),
                     }),
+                    hardware: Some(HardwarePermissionsToml { cuda: Some(true) }),
                 },
             )]),
         }
@@ -1072,6 +1078,7 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),
@@ -1226,6 +1233,7 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
                                 enabled: Some(case.network_enabled),
                                 ..Default::default()
                             }),
+                            hardware: None,
                         },
                     )]),
                 }),
@@ -1381,6 +1389,7 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),
@@ -1486,6 +1495,7 @@ enabled = false
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),
@@ -1540,6 +1550,7 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                             }),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),
@@ -1590,6 +1601,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                         ]),
                     }),
                     network: None,
+                    hardware: None,
                 },
             )]),
         }),
@@ -1727,6 +1739,63 @@ async fn default_permissions_extended_profile_preserves_parent_metadata() -> std
 }
 
 #[tokio::test]
+async fn default_permissions_profile_populates_hardware_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let cfg = ConfigToml {
+        default_permissions: Some("cuda-workspace".to_string()),
+        permissions: Some(PermissionsToml {
+            entries: BTreeMap::from([(
+                "cuda-workspace".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    workspace_roots: None,
+                    filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
+                        entries: BTreeMap::from([(
+                            ":minimal".to_string(),
+                            FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                        )]),
+                    }),
+                    network: None,
+                    hardware: Some(HardwarePermissionsToml { cuda: Some(true) }),
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let expected_hardware = HardwarePermissions { cuda: true };
+    assert_eq!(
+        config
+            .permissions
+            .permission_profile()
+            .hardware_permissions(),
+        expected_hardware
+    );
+    assert_eq!(
+        config
+            .permissions
+            .effective_permission_profile()
+            .hardware_permissions(),
+        expected_hardware
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn permission_profile_override_populates_runtime_permissions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
@@ -1787,6 +1856,7 @@ async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Restricted,
+        hardware: Default::default(),
     };
 
     let config = Config::load_from_base_config_with_overrides(
@@ -1821,6 +1891,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        hardware: Default::default(),
     };
 
     let mut config = Config::load_from_base_config_with_overrides(
@@ -1958,6 +2029,7 @@ async fn permission_profile_override_preserves_configured_network_policy_without
                             }),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2011,6 +2083,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2089,6 +2162,7 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2227,6 +2301,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2790,6 +2865,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2856,6 +2932,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -2916,6 +2993,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
             )]),
         }),
         network: None,
+        hardware: None,
     })
     .await?;
 
@@ -2965,6 +3043,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
             )]),
         }),
         network: None,
+        hardware: None,
     })
     .await?;
 
@@ -2995,6 +3074,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
         workspace_roots: None,
         filesystem: None,
         network: None,
+        hardware: None,
     })
     .await?;
 
@@ -3029,6 +3109,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
             entries: BTreeMap::new(),
         }),
         network: None,
+        hardware: None,
     })
     .await?;
 
@@ -3073,6 +3154,7 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
                             )]),
                         }),
                         network: None,
+                        hardware: None,
                     },
                 )]),
             }),
@@ -3122,6 +3204,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        hardware: None,
                     },
                 )]),
             }),

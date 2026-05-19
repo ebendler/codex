@@ -59,6 +59,22 @@ commands that would enter the bubblewrap path.
   still win. For example, `/repo = write`, `/repo/a = none`, `/repo/a/b = write`
   keeps `/repo` writable, denies `/repo/a`, and reopens `/repo/a/b` as
   writable again.
+- Commands launched through bubblewrap receive `SANDBOX_RUNTIME=bwrap` via
+  `bwrap --setenv`; the marker is set only when `bwrap` actually starts and is
+  intended for runtime library detection, including CUDA-specific paths.
+- When the active permission profile sets `hardware.cuda = true`, bubblewrap
+  bind-mounts compute-only NVIDIA CUDA device nodes with `--dev-bind-try` when
+  present: `/dev/nvidiactl`, `/dev/nvidia[0-9]+`, `/dev/nvidia-uvm`,
+  `/dev/nvidia-uvm-tools`, and `/dev/nvidia-caps`. Display nodes like
+  `/dev/nvidia-modeset` are not included.
+
+  ```toml
+  default_permissions = "cuda-workspace"
+
+  [permissions.cuda-workspace.hardware]
+  cuda = true
+  ```
+
 - When bubblewrap is active, unreadable glob entries are expanded before
   launching the sandbox and matching files are masked in bubblewrap:
 
