@@ -28,6 +28,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::CdiPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -229,6 +230,7 @@ fn permission_profile_toml_from_file_system_policy(
         workspace_roots: None,
         filesystem: Some(filesystem),
         network: None,
+        cdi: None,
     }
 }
 
@@ -343,11 +345,23 @@ pub(crate) fn network_proxy_config_for_profile_selection(
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+    Ok(
+        compile_permission_profile_to_runtime_profile(permissions, profile_name, startup_warnings)?
+            .to_runtime_permissions(),
+    )
+}
+
+pub(crate) fn compile_permission_profile_to_runtime_profile(
+    permissions: &PermissionsToml,
+    profile_name: &str,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<PermissionProfile> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(Vec::new());
     let base_network_sandbox_policy = NetworkSandboxPolicy::Restricted;
@@ -403,7 +417,24 @@ pub(crate) fn compile_permission_profile(
     }
     let network_sandbox_policy =
         compile_network_sandbox_policy(profile.network.as_ref(), base_network_sandbox_policy);
-    Ok((file_system_sandbox_policy, network_sandbox_policy))
+    let mut runtime_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    );
+    if let Some(devices) = profile
+        .cdi
+        .as_ref()
+        .and_then(|cdi| cdi.devices.as_ref())
+        .filter(|devices| !devices.is_empty())
+        && let PermissionProfile::Managed { cdi, .. } = &mut runtime_profile
+    {
+        *cdi = Some(CdiPermissions {
+            devices: devices.clone(),
+            allowed_devices: None,
+            denied_devices: Vec::new(),
+        });
+    }
+    Ok(runtime_profile)
 }
 
 pub(crate) fn compile_permission_profile_selection(
@@ -412,8 +443,23 @@ pub(crate) fn compile_permission_profile_selection(
     workspace_write: Option<&SandboxWorkspaceWrite>,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+    Ok(compile_permission_profile_selection_to_runtime_profile(
+        permissions,
+        profile_name,
+        workspace_write,
+        startup_warnings,
+    )?
+    .to_runtime_permissions())
+}
+
+pub(crate) fn compile_permission_profile_selection_to_runtime_profile(
+    permissions: Option<&PermissionsToml>,
+    profile_name: &str,
+    workspace_write: Option<&SandboxWorkspaceWrite>,
+    startup_warnings: &mut Vec<String>,
+) -> io::Result<PermissionProfile> {
     if let Some(permission_profile) = builtin_permission_profile(profile_name, workspace_write) {
-        return Ok(permission_profile.to_runtime_permissions());
+        return Ok(permission_profile);
     }
     reject_unknown_builtin_permission_profile(profile_name)?;
 
@@ -423,7 +469,7 @@ pub(crate) fn compile_permission_profile_selection(
             "default_permissions requires a `[permissions]` table",
         )
     })?;
-    compile_permission_profile(permissions, profile_name, startup_warnings)
+    compile_permission_profile_to_runtime_profile(permissions, profile_name, startup_warnings)
 }
 
 pub(crate) fn compile_permission_profile_workspace_roots(

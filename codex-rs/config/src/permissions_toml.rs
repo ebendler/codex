@@ -116,6 +116,13 @@ pub struct PermissionProfileToml {
     pub workspace_roots: Option<WorkspaceRootsToml>,
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
+    pub cdi: Option<CdiPermissionsToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CdiPermissionsToml {
+    pub devices: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -627,5 +634,33 @@ pub fn overlay_network_domain_permissions(
             NetworkDomainPermissionToml::Deny => ProxyNetworkDomainPermission::Deny,
         };
         config.upsert_domain_permission(pattern.clone(), permission, normalize_host);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CdiPermissionsToml;
+    use super::PermissionProfileToml;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn permission_profile_parses_cdi_devices() {
+        let toml = r#"
+[cdi]
+devices = ["nvidia.com/gpu=*", "vendor.com/fpga=0"]
+"#;
+
+        let profile: PermissionProfileToml =
+            toml::from_str(toml).expect("permission profile should deserialize");
+
+        assert_eq!(
+            profile.cdi,
+            Some(CdiPermissionsToml {
+                devices: Some(vec![
+                    "nvidia.com/gpu=*".to_string(),
+                    "vendor.com/fpga=0".to_string(),
+                ]),
+            })
+        );
     }
 }

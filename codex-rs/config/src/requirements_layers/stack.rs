@@ -225,6 +225,7 @@ fn populate_merged_regular_fields_with_sources(
         marketplaces,
         apps,
         rules: _,
+        cdi,
         enforce_residency,
         network,
         permissions,
@@ -254,6 +255,7 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(plugins, &["plugins"]);
     set_sourced!(marketplaces, &["marketplaces"]);
     set_sourced!(apps, &["apps"]);
+    set_sourced!(cdi, &["experimental_cdi"]);
     set_sourced!(enforce_residency, &["enforce_residency"]);
     set_sourced!(network, &["experimental_network"]);
     set_sourced!(permissions, &["permissions"]);

@@ -392,6 +392,31 @@ impl ManagedFileSystemPermissions {
     }
 }
 
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CdiPermissions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<_>")]
+    pub devices: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allowed_devices: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<_>")]
+    pub denied_devices: Vec<String>,
+}
+
+impl CdiPermissions {
+    pub fn is_empty(&self) -> bool {
+        self.devices.is_empty() && self.allowed_devices.is_none() && self.denied_devices.is_empty()
+    }
+
+    fn option_is_empty(value: &Option<Self>) -> bool {
+        value.as_ref().is_none_or(Self::is_empty)
+    }
+}
+
 /// Reserved identifier for the built-in read-only permission profile.
 pub const BUILT_IN_PERMISSION_PROFILE_READ_ONLY: &str = ":read-only";
 
@@ -412,6 +437,9 @@ pub enum PermissionProfile<PathType = AbsolutePathBuf> {
     Managed {
         file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
+        #[serde(default, skip_serializing_if = "CdiPermissions::option_is_empty")]
+        #[ts(optional)]
+        cdi: Option<CdiPermissions>,
     },
     /// Do not apply an outer sandbox.
     Disabled,
@@ -427,9 +455,11 @@ impl From<PermissionProfile<AbsolutePathBuf>> for PermissionProfile<PathUri> {
             PermissionProfile::Managed {
                 file_system,
                 network,
+                cdi,
             } => PermissionProfile::Managed {
                 file_system: file_system.into(),
                 network,
+                cdi,
             },
             PermissionProfile::Disabled => PermissionProfile::Disabled,
             PermissionProfile::External { network } => PermissionProfile::External { network },
@@ -445,9 +475,11 @@ impl TryFrom<PermissionProfile<PathUri>> for PermissionProfile<AbsolutePathBuf> 
             PermissionProfile::Managed {
                 file_system,
                 network,
+                cdi,
             } => PermissionProfile::Managed {
                 file_system: file_system.try_into()?,
                 network,
+                cdi,
             },
             PermissionProfile::Disabled => PermissionProfile::Disabled,
             PermissionProfile::External { network } => PermissionProfile::External { network },
@@ -496,6 +528,7 @@ impl<PathType> Default for PermissionProfile<PathType> {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            cdi: None,
         }
     }
 }
@@ -507,6 +540,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network: NetworkSandboxPolicy::Restricted,
+            cdi: None,
         }
     }
 
@@ -543,6 +577,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+            cdi: None,
         }
     }
 
@@ -554,6 +589,7 @@ impl PermissionProfile {
             Self::Managed {
                 file_system,
                 network,
+                cdi,
             } => {
                 let file_system = file_system
                     .to_sandbox_policy()
@@ -561,6 +597,7 @@ impl PermissionProfile {
                 Self::Managed {
                     file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
                     network,
+                    cdi,
                 }
             }
             Self::Disabled => Self::Disabled,
@@ -603,8 +640,36 @@ impl PermissionProfile {
                         file_system_sandbox_policy,
                     ),
                     network: network_sandbox_policy,
+                    cdi: None,
                 }
             }
+        }
+    }
+
+    pub fn with_runtime_permissions(
+        &self,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+    ) -> Self {
+        let profile = Self::from_runtime_permissions_with_enforcement(
+            self.enforcement(),
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        );
+        match (profile, self) {
+            (
+                Self::Managed {
+                    file_system,
+                    network,
+                    ..
+                },
+                Self::Managed { cdi, .. },
+            ) => Self::Managed {
+                file_system,
+                network,
+                cdi: cdi.clone(),
+            },
+            (profile, _) => profile,
         }
     }
 
@@ -647,11 +712,19 @@ impl PermissionProfile {
         }
     }
 
+    pub fn cdi_permissions(&self) -> Option<&CdiPermissions> {
+        match self {
+            Self::Managed { cdi, .. } => cdi.as_ref().filter(|cdi| !cdi.is_empty()),
+            Self::Disabled | Self::External { .. } => None,
+        }
+    }
+
     pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
         match self {
             Self::Managed {
                 file_system,
                 network,
+                ..
             } => file_system
                 .to_sandbox_policy()
                 .to_legacy_sandbox_policy(*network, cwd),
@@ -681,6 +754,8 @@ enum TaggedPermissionProfile<PathType = AbsolutePathBuf> {
     Managed {
         file_system: ManagedFileSystemPermissions<PathType>,
         network: NetworkSandboxPolicy,
+        #[serde(default)]
+        cdi: Option<CdiPermissions>,
     },
     Disabled,
     #[serde(rename_all = "snake_case")]
@@ -695,9 +770,11 @@ impl<PathType> From<TaggedPermissionProfile<PathType>> for PermissionProfile<Pat
             TaggedPermissionProfile::Managed {
                 file_system,
                 network,
+                cdi,
             } => Self::Managed {
                 file_system,
                 network,
+                cdi,
             },
             TaggedPermissionProfile::Disabled => Self::Disabled,
             TaggedPermissionProfile::External { network } => Self::External { network },
@@ -739,6 +816,7 @@ impl<PathType> From<LegacyPermissionProfile<PathType>> for PermissionProfile<Pat
         Self::Managed {
             file_system,
             network: network_sandbox_policy,
+            cdi: None,
         }
     }
 }
@@ -2445,6 +2523,52 @@ mod tests {
     }
 
     #[test]
+    fn managed_permission_profile_serializes_cdi_permissions() {
+        let profile: PermissionProfile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Unrestricted,
+            network: NetworkSandboxPolicy::Restricted,
+            cdi: Some(CdiPermissions {
+                devices: vec!["nvidia.com/gpu=*".to_string()],
+                allowed_devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+                denied_devices: vec!["nvidia.com/gpu=debug-*".to_string()],
+            }),
+        };
+
+        let json = serde_json::to_value(&profile).unwrap();
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "managed",
+                "file_system": { "type": "unrestricted" },
+                "network": "restricted",
+                "cdi": {
+                    "devices": ["nvidia.com/gpu=*"],
+                    "allowed_devices": ["nvidia.com/gpu=*"],
+                    "denied_devices": ["nvidia.com/gpu=debug-*"]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn cdi_permissions_preserves_empty_allowlist_policy() {
+        let permissions = CdiPermissions {
+            devices: Vec::new(),
+            allowed_devices: Some(Vec::new()),
+            denied_devices: Vec::new(),
+        };
+
+        assert_eq!(permissions.is_empty(), false);
+        assert_eq!(
+            serde_json::to_value(permissions).unwrap(),
+            serde_json::json!({
+                "allowed_devices": []
+            })
+        );
+    }
+
+    #[test]
     fn permission_profile_deserializes_legacy_rollout_shape() -> Result<()> {
         let legacy = serde_json::json!({
             "network": {
@@ -2479,6 +2603,7 @@ mod tests {
                     glob_scan_max_depth: NonZeroUsize::new(2),
                 },
                 network: NetworkSandboxPolicy::Enabled,
+                cdi: None,
             }
         );
         Ok(())
@@ -2566,6 +2691,7 @@ mod tests {
             PermissionProfile::Managed {
                 file_system: ManagedFileSystemPermissions::Unrestricted,
                 network: NetworkSandboxPolicy::Restricted,
+                cdi: None,
             },
             "the legacy ExternalSandbox projection must not hide a split unrestricted filesystem policy"
         );

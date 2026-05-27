@@ -24,6 +24,7 @@ codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+container-device-interface = { workspace = true }
 globset = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
@@ -32,6 +33,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 url = { workspace = true }
+wildmatch = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 codex-core = { workspace = true }

@@ -1581,6 +1581,7 @@ fn yolo_mode_includes_managed_full_access_profiles() {
     let permission_profile: PermissionProfile = PermissionProfile::Managed {
         network: NetworkSandboxPolicy::Enabled,
         file_system: ManagedFileSystemPermissions::Unrestricted,
+        cdi: Default::default(),
     };
 
     assert!(has_yolo_permissions(

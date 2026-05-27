@@ -160,6 +160,7 @@ pub struct ConfigRequirements {
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
     pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
+    pub cdi: Option<Sourced<CdiRequirementsToml>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
     pub network: Option<Sourced<NetworkConstraints>>,
@@ -202,6 +203,7 @@ impl Default for ConfigRequirements {
             plugins: None,
             marketplaces: None,
             exec_policy: None,
+            cdi: None,
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
@@ -819,6 +821,18 @@ impl AppsRequirementsToml {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct CdiRequirementsToml {
+    pub allowed_devices: Option<Vec<String>>,
+    pub denied_devices: Option<Vec<String>>,
+}
+
+impl CdiRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allowed_devices.is_none() && self.denied_devices.is_none()
+    }
+}
+
 /// Merge app requirements from a lower-precedence source into an existing higher-precedence set.
 /// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers,
 /// while exact tool approval settings keep the higher-precedence value when present.
@@ -873,6 +887,8 @@ pub struct ConfigRequirementsToml {
     pub marketplaces: Option<MarketplaceRequirementsToml>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
+    #[serde(rename = "experimental_cdi")]
+    pub cdi: Option<CdiRequirementsToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
@@ -955,6 +971,7 @@ pub struct ConfigRequirementsWithSources {
     pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
+    pub cdi: Option<Sourced<CdiRequirementsToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
     pub permissions: Option<Sourced<PermissionsRequirementsToml>>,
@@ -1000,6 +1017,7 @@ impl ConfigRequirementsWithSources {
             marketplaces: _,
             apps: _,
             rules: _,
+            cdi: _,
             enforce_residency: _,
             network: _,
             permissions: _,
@@ -1037,6 +1055,7 @@ impl ConfigRequirementsWithSources {
                 plugins,
                 marketplaces,
                 rules,
+                cdi,
                 enforce_residency,
                 network,
                 permissions,
@@ -1074,6 +1093,7 @@ impl ConfigRequirementsWithSources {
             marketplaces,
             apps,
             rules,
+            cdi,
             enforce_residency,
             network,
             permissions,
@@ -1100,6 +1120,7 @@ impl ConfigRequirementsWithSources {
             marketplaces: marketplaces.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
+            cdi: cdi.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
             permissions: permissions.map(|sourced| sourced.value),
@@ -1213,6 +1234,7 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(AppsRequirementsToml::is_empty)
             && self.rules.is_none()
+            && self.cdi.as_ref().is_none_or(CdiRequirementsToml::is_empty)
             && self.enforce_residency.is_none()
             && self.network.is_none()
             && self.permissions.is_none()
@@ -1273,6 +1295,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             marketplaces,
             apps: _apps,
             rules,
+            cdi,
             enforce_residency,
             network,
             permissions,
@@ -1573,6 +1596,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             plugins,
             marketplaces,
             exec_policy,
+            cdi,
             enforce_residency,
             network,
             filesystem,
@@ -1671,6 +1695,7 @@ mod tests {
             marketplaces,
             apps,
             rules,
+            cdi,
             enforce_residency,
             network,
             permissions,
@@ -1706,6 +1731,7 @@ mod tests {
             marketplaces: marketplaces.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            cdi: cdi.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1889,6 +1915,27 @@ mod tests {
     }
 
     #[test]
+    fn config_requirements_parses_cdi_policy() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                [experimental_cdi]
+                allowed_devices = ["nvidia.com/gpu=*"]
+                denied_devices = ["nvidia.com/gpu=debug-*"]
+            "#,
+        )?;
+
+        assert_eq!(
+            requirements.cdi,
+            Some(CdiRequirementsToml {
+                allowed_devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+                denied_devices: Some(vec!["nvidia.com/gpu=debug-*".to_string()]),
+            })
+        );
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn merge_unset_fields_copies_every_field_and_sets_sources() {
         let mut target = ConfigRequirementsWithSources::default();
         let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
@@ -1917,6 +1964,10 @@ mod tests {
                 service_tier: Some("fast".to_string()),
             }),
         };
+        let cdi = CdiRequirementsToml {
+            allowed_devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+            denied_devices: Some(vec!["nvidia.com/gpu=debug-*".to_string()]),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
         let guardian_policy_config = "Use the company-managed guardian policy.".to_string();
@@ -1943,6 +1994,7 @@ mod tests {
             marketplaces: None,
             apps: None,
             rules: None,
+            cdi: Some(cdi.clone()),
             enforce_residency: Some(enforce_residency),
             network: None,
             permissions: None,
@@ -1994,6 +2046,7 @@ mod tests {
                 marketplaces: None,
                 apps: None,
                 rules: None,
+                cdi: Some(Sourced::new(cdi, enforce_source.clone())),
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
                 permissions: None,
@@ -2042,6 +2095,7 @@ mod tests {
                 marketplaces: None,
                 apps: None,
                 rules: None,
+                cdi: None,
                 enforce_residency: None,
                 network: None,
                 permissions: None,
@@ -2098,6 +2152,7 @@ mod tests {
                 marketplaces: None,
                 apps: None,
                 rules: None,
+                cdi: None,
                 enforce_residency: None,
                 network: None,
                 permissions: None,

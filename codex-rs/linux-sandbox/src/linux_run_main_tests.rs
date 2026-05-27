@@ -60,6 +60,7 @@ fn inserts_bwrap_argv0_before_command_separator() {
             network_mode: BwrapNetworkMode::FullAccess,
             ..Default::default()
         },
+        &crate::bwrap::BwrapCdiEdits::default(),
     )
     .expect("build bwrap argv")
     .args;
@@ -104,6 +105,7 @@ fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
             network_mode: BwrapNetworkMode::FullAccess,
             ..Default::default()
         },
+        &crate::bwrap::BwrapCdiEdits::default(),
     )
     .expect("build bwrap argv")
     .args;
@@ -173,6 +175,7 @@ fn inserts_unshare_net_when_network_isolation_requested() {
             network_mode: BwrapNetworkMode::Isolated,
             ..Default::default()
         },
+        &crate::bwrap::BwrapCdiEdits::default(),
     )
     .expect("build bwrap argv")
     .args;
@@ -192,6 +195,7 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
             network_mode: BwrapNetworkMode::ProxyOnly,
             ..Default::default()
         },
+        &crate::bwrap::BwrapCdiEdits::default(),
     )
     .expect("build bwrap argv")
     .args;
@@ -268,10 +272,47 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         Path::new("/"),
         &FileSystemSandboxPolicy::unrestricted(),
         mode,
+        /*force_bwrap*/ false,
     )
     .expect("build preflight argv")
     .args;
     assert!(argv.iter().any(|arg| arg == "--"));
+}
+
+#[test]
+fn forced_bwrap_wraps_full_access_policy() {
+    let argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &FileSystemSandboxPolicy::unrestricted(),
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+            force_bwrap: true,
+            ..Default::default()
+        },
+        &crate::bwrap::BwrapCdiEdits::default(),
+    )
+    .expect("build forced bwrap argv")
+    .args;
+
+    assert!(argv.iter().any(|arg| arg == "--"));
+}
+
+#[test]
+fn legacy_landlock_rejects_cdi_devices() {
+    let result = std::panic::catch_unwind(|| {
+        ensure_legacy_landlock_mode_supports_policy(
+            /*use_legacy_landlock*/ true,
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Enabled,
+            Path::new("/"),
+            /*cdi_requested*/ true,
+        );
+    });
+
+    assert!(result.is_err());
 }
 
 #[test]
@@ -621,6 +662,7 @@ fn legacy_landlock_rejects_split_only_filesystem_policies() {
             &policy,
             NetworkSandboxPolicy::Restricted,
             temp_dir.path(),
+            /*cdi_requested*/ false,
         );
     });
 

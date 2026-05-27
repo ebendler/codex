@@ -360,8 +360,7 @@ impl SessionConfiguration {
             next_configuration
                 .permission_profile_state
                 .set_legacy_permission_profile(
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(&current_sandbox_policy),
+                    self.permission_profile().with_runtime_permissions(
                         &file_system_sandbox_policy,
                         current_network_sandbox_policy,
                     ),
@@ -383,19 +382,14 @@ impl SessionConfiguration {
         profile_workspace_roots: Vec<AbsolutePathBuf>,
         preserve_deny_reads_from: Option<&FileSystemSandboxPolicy>,
     ) -> ConstraintResult<()> {
-        let enforcement = permission_profile.enforcement();
         let (mut file_system_sandbox_policy, network_sandbox_policy) =
             permission_profile.to_runtime_permissions();
         if let Some(existing_file_system_policy) = preserve_deny_reads_from {
             file_system_sandbox_policy
                 .preserve_deny_read_restrictions_from(existing_file_system_policy);
         }
-        let effective_permission_profile =
-            PermissionProfile::from_runtime_permissions_with_enforcement(
-                enforcement,
-                &file_system_sandbox_policy,
-                network_sandbox_policy,
-            );
+        let effective_permission_profile = permission_profile
+            .with_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy);
 
         let permission_snapshot = match active_permission_profile {
             Some(active_permission_profile) => {
