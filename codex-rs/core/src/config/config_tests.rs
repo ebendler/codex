@@ -81,6 +81,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+use codex_protocol::models::CdiPermissions;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -1099,6 +1100,8 @@ strip_request_headers = ["authorization"]
                             )])),
                         }),
                     }),
+
+                    cdi: None,
                 },
             )]),
         }
@@ -1267,6 +1270,8 @@ async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_
                             enabled: Some(true),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -1319,6 +1324,8 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -1473,6 +1480,8 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
                                 enabled: Some(case.network_enabled),
                                 ..Default::default()
                             }),
+
+                            cdi: None,
                         },
                     )]),
                 }),
@@ -1717,6 +1726,8 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -1781,6 +1792,8 @@ enabled = false
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -1835,6 +1848,8 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                             }),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -1885,6 +1900,8 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                         ]),
                     }),
                     network: None,
+
+                    cdi: None,
                 },
             )]),
         }),
@@ -1980,6 +1997,8 @@ async fn default_permissions_extended_profile_preserves_parent_metadata() -> std
                                 )]),
                             }),
                             network: None,
+
+                            cdi: None,
                         },
                     ),
                     (
@@ -1990,6 +2009,8 @@ async fn default_permissions_extended_profile_preserves_parent_metadata() -> std
                             workspace_roots: None,
                             filesystem: None,
                             network: None,
+
+                            cdi: None,
                         },
                     ),
                 ]),
@@ -2075,6 +2096,7 @@ async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Restricted,
+        cdi: Default::default(),
     };
 
     let config = Config::load_from_base_config_with_overrides(
@@ -2109,6 +2131,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        cdi: Default::default(),
     };
 
     let mut config = Config::load_from_base_config_with_overrides(
@@ -2246,6 +2269,8 @@ async fn permission_profile_override_preserves_configured_network_policy_without
                             }),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -2299,6 +2324,8 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -2377,6 +2404,8 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -2515,6 +2544,8 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -2643,6 +2674,8 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                             enabled: Some(true),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -2735,6 +2768,8 @@ async fn default_permissions_profile_can_extend_builtin_read_only() -> std::io::
                             enabled: Some(true),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -3179,6 +3214,8 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -3246,6 +3283,8 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -3306,6 +3345,8 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
             )]),
         }),
         network: None,
+
+        cdi: None,
     })
     .await?;
 
@@ -3355,6 +3396,8 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
             )]),
         }),
         network: None,
+
+        cdi: None,
     })
     .await?;
 
@@ -3385,6 +3428,8 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
         workspace_roots: None,
         filesystem: None,
         network: None,
+
+        cdi: None,
     })
     .await?;
 
@@ -3419,6 +3464,8 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
             entries: BTreeMap::new(),
         }),
         network: None,
+
+        cdi: None,
     })
     .await?;
 
@@ -3463,6 +3510,8 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
                             )]),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -3512,6 +3561,8 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                             enabled: Some(true),
                             ..Default::default()
                         }),
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -8868,6 +8919,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         marketplaces: None,
         apps: None,
         rules: None,
+        cdi: None,
         enforce_residency: None,
         network: None,
         permissions: None,
@@ -9701,6 +9753,81 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
             .contains("Configured value for `permission_profile` is disallowed by requirements")),
         "{:?}",
         config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn requirements_attach_cdi_policy_to_effective_profile() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"default_permissions = "gpu"
+
+[permissions.gpu]
+extends = ":workspace"
+
+[permissions.gpu.cdi]
+devices = ["nvidia.com/gpu=*"]
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[experimental_cdi]
+allowed_devices = ["nvidia.com/gpu=*"]
+denied_devices = ["nvidia.com/gpu=debug-*"]"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .effective_permission_profile()
+            .cdi_permissions(),
+        Some(&CdiPermissions {
+            devices: vec!["nvidia.com/gpu=*".to_string()],
+            allowed_devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+            denied_devices: vec!["nvidia.com/gpu=debug-*".to_string()],
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn requirements_do_not_create_cdi_without_profile_devices() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"default_permissions = "gpu"
+
+[permissions.gpu]
+extends = ":workspace"
+"#,
+    )?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"[experimental_cdi]
+allowed_devices = ["nvidia.com/gpu=*"]
+denied_devices = ["nvidia.com/gpu=debug-*"]"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .effective_permission_profile()
+            .cdi_permissions(),
+        None
     );
     Ok(())
 }

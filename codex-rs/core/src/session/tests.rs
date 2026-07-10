@@ -4774,6 +4774,8 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                         )]),
                     }),
                     network: None,
+
+                    cdi: None,
                 },
             ),
             (
@@ -4795,6 +4797,8 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                         enable_socks5: Some(false),
                         ..Default::default()
                     }),
+
+                    cdi: None,
                 },
             ),
         ]),

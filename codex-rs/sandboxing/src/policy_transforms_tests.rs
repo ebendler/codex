@@ -1,11 +1,15 @@
 use super::effective_file_system_sandbox_policy;
+use super::effective_permission_profile;
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
 use super::should_require_platform_sandbox;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
+use codex_protocol::models::CdiPermissions;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile as RuntimePermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -910,5 +914,67 @@ fn effective_file_system_sandbox_policy_merges_additional_write_roots() {
             access: FileSystemAccessMode::Write,
         }),
         true
+    );
+}
+
+#[test]
+fn effective_permission_profile_preserves_cdi_permissions() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let cwd = AbsolutePathBuf::from_absolute_path(
+        canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+    )
+    .expect("absolute temp dir");
+    let allowed_path = cwd.join("allowed");
+    let cdi_permissions = CdiPermissions {
+        devices: vec!["nvidia.com/gpu=*".to_string()],
+        allowed_devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+        denied_devices: vec!["nvidia.com/gpu=debug-*".to_string()],
+    };
+    let additional_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(Vec::new()),
+            Some(vec![allowed_path.clone()]),
+        )),
+        ..Default::default()
+    };
+
+    let effective_profile = effective_permission_profile(
+        &RuntimePermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::Root,
+                    },
+                    access: FileSystemAccessMode::Read,
+                }],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+            cdi: Some(cdi_permissions.clone()),
+        },
+        Some(&additional_permissions),
+    );
+
+    assert_eq!(
+        effective_profile,
+        RuntimePermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Root,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Path { path: allowed_path },
+                        access: FileSystemAccessMode::Write,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+            cdi: Some(cdi_permissions),
+        }
     );
 }

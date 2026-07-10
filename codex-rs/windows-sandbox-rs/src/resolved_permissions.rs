@@ -262,6 +262,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            cdi: Default::default(),
         };
         let workspace_roots = workspace_roots_for(workspace_root.as_path());
         let permissions =
@@ -431,6 +432,7 @@ mod tests {
         let permission_profile = PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Restricted,
+            cdi: Default::default(),
         };
 
         let err =
@@ -459,6 +461,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            cdi: Default::default(),
         };
         let workspace_roots = workspace_roots_for(cwd.as_path());
 

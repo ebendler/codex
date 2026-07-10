@@ -353,6 +353,18 @@
       },
       "type": "object"
     },
+    "CdiPermissionsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "devices": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2355,6 +2367,9 @@
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
+        "cdi": {
+          "$ref": "#/definitions/CdiPermissionsToml"
+        },
         "description": {
           "type": "string"
         },

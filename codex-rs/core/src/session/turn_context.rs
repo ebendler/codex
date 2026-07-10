@@ -318,11 +318,9 @@ impl TurnContext {
             base_network_sandbox_policy,
             additional_permissions.as_ref(),
         );
-        let permissions = PermissionProfile::from_runtime_permissions_with_enforcement(
-            self.permission_profile.enforcement(),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
+        let permissions = self
+            .permission_profile
+            .with_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy);
         FileSystemSandboxContext {
             permissions: permissions.into(),
             cwd: Some(cwd.clone()),

@@ -46,6 +46,7 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
             ],
             glob_scan_max_depth: None,
         },
+        cdi: Default::default(),
     }
 }
 
@@ -370,6 +371,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             ],
             glob_scan_max_depth: None,
         },
+        cdi: Default::default(),
     };
     let cwd = test_path_buf("/tmp/project").abs();
 

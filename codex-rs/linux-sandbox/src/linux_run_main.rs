@@ -17,9 +17,12 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
+use crate::bwrap::BwrapCdiEdits;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
+use crate::cdi::RuntimeCdiPolicy;
+use crate::cdi::resolve_cdi_for_bwrap;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
 use crate::launcher::preferred_bwrap_supports_argv0;
@@ -166,11 +169,13 @@ pub fn run_main() -> ! {
         file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
+    let cdi_policy = RuntimeCdiPolicy::from_permission_profile(&permission_profile);
     ensure_legacy_landlock_mode_supports_policy(
         use_legacy_landlock,
         &file_system_sandbox_policy,
         network_sandbox_policy,
         &sandbox_policy_cwd,
+        cdi_policy.is_some(),
     );
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
@@ -197,7 +202,10 @@ pub fn run_main() -> ! {
         exec_or_panic(command);
     }
 
-    if file_system_sandbox_policy.has_full_disk_write_access() && !allow_network_for_proxy {
+    if file_system_sandbox_policy.has_full_disk_write_access()
+        && !allow_network_for_proxy
+        && cdi_policy.is_none()
+    {
         if let Err(e) = apply_permission_profile_to_current_thread(
             &permission_profile,
             &sandbox_policy_cwd,
@@ -214,6 +222,15 @@ pub fn run_main() -> ! {
         // Outer stage: bubblewrap first, then re-enter this binary in the
         // sandboxed environment to apply seccomp. This path never falls back
         // to legacy Landlock on failure.
+        let cdi_edits = match &cdi_policy {
+            Some(policy) => resolve_cdi_for_bwrap(policy).unwrap_or_else(|err| {
+                panic!("error resolving CDI devices for Linux sandbox: {err}")
+            }),
+            None => crate::bwrap::BwrapCdiEdits::default(),
+        };
+        for warning in &cdi_edits.warnings {
+            eprintln!("warning: {warning}");
+        }
         let proxy_route_spec =
             if allow_network_for_proxy {
                 Some(prepare_host_proxy_route_spec().unwrap_or_else(|err| {
@@ -231,13 +248,16 @@ pub fn run_main() -> ! {
             command,
         });
         run_bwrap_with_proc_fallback(
-            &sandbox_policy_cwd,
-            command_cwd.as_deref(),
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
             inner,
-            !no_proc,
-            allow_network_for_proxy,
+            BwrapRunContext {
+                sandbox_policy_cwd: &sandbox_policy_cwd,
+                command_cwd: command_cwd.as_deref(),
+                file_system_sandbox_policy: &file_system_sandbox_policy,
+                network_sandbox_policy,
+                mount_proc: !no_proc,
+                allow_network_for_proxy,
+                cdi_edits: &cdi_edits,
+            },
         );
     }
 
@@ -303,7 +323,11 @@ fn ensure_legacy_landlock_mode_supports_policy(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_policy_cwd: &Path,
+    cdi_requested: bool,
 ) {
+    if use_legacy_landlock && cdi_requested {
+        panic!("CDI devices are only supported with the bubblewrap Linux sandbox");
+    }
     if use_legacy_landlock
         && file_system_sandbox_policy
             .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
@@ -314,25 +338,34 @@ fn ensure_legacy_landlock_mode_supports_policy(
     }
 }
 
-fn run_bwrap_with_proc_fallback(
-    sandbox_policy_cwd: &Path,
-    command_cwd: Option<&Path>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+struct BwrapRunContext<'a> {
+    sandbox_policy_cwd: &'a Path,
+    command_cwd: Option<&'a Path>,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
-    inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
-) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
-    let mut mount_proc = mount_proc;
-    let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
+    cdi_edits: &'a BwrapCdiEdits,
+}
+
+fn run_bwrap_with_proc_fallback(inner: Vec<String>, context: BwrapRunContext<'_>) -> ! {
+    let network_mode = bwrap_network_mode(
+        context.network_sandbox_policy,
+        context.allow_network_for_proxy,
+    );
+    let mut mount_proc = context.mount_proc;
+    let command_cwd = context.command_cwd.unwrap_or(context.sandbox_policy_cwd);
+    let force_bwrap = !context.cdi_edits.env.is_empty()
+        || !context.cdi_edits.devices.is_empty()
+        || !context.cdi_edits.mounts.is_empty();
 
     if mount_proc
         && !preflight_proc_mount_support(
-            sandbox_policy_cwd,
+            context.sandbox_policy_cwd,
             command_cwd,
-            file_system_sandbox_policy,
+            context.file_system_sandbox_policy,
             network_mode,
+            force_bwrap,
         )
         .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
@@ -344,14 +377,16 @@ fn run_bwrap_with_proc_fallback(
     let options = BwrapOptions {
         mount_proc,
         network_mode,
+        force_bwrap,
         ..Default::default()
     };
     let mut bwrap_args = build_bwrap_argv(
         inner,
-        file_system_sandbox_policy,
-        sandbox_policy_cwd,
+        context.file_system_sandbox_policy,
+        context.sandbox_policy_cwd,
         command_cwd,
         options,
+        context.cdi_edits,
     )
     .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
     apply_inner_command_argv0(&mut bwrap_args.args);
@@ -377,6 +412,7 @@ fn build_bwrap_argv(
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
+    cdi_edits: &crate::bwrap::BwrapCdiEdits,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let bwrap_args = create_bwrap_command_args(
         inner,
@@ -384,6 +420,7 @@ fn build_bwrap_argv(
         sandbox_policy_cwd,
         command_cwd,
         options,
+        cdi_edits,
     )?;
 
     let mut argv = vec!["bwrap".to_string()];
@@ -446,12 +483,14 @@ fn preflight_proc_mount_support(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    force_bwrap: bool,
 ) -> CodexResult<bool> {
     let preflight_argv = build_preflight_bwrap_argv(
         sandbox_policy_cwd,
         command_cwd,
         file_system_sandbox_policy,
         network_mode,
+        force_bwrap,
     )?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     Ok(!is_proc_mount_failure(stderr.as_str()))
@@ -462,6 +501,7 @@ fn build_preflight_bwrap_argv(
     command_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
+    force_bwrap: bool,
 ) -> CodexResult<crate::bwrap::BwrapArgs> {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
@@ -472,8 +512,10 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
+            force_bwrap,
             ..Default::default()
         },
+        &crate::bwrap::BwrapCdiEdits::default(),
     )
 }
 

@@ -2080,6 +2080,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            cdi: Default::default(),
         };
 
         assert_eq!(
@@ -2110,6 +2111,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            cdi: Default::default(),
         };
 
         assert_eq!(

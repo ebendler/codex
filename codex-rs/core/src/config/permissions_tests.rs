@@ -2,6 +2,7 @@ use super::*;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
 use codex_config::config_toml::ConfigToml;
+use codex_config::permissions_toml::CdiPermissionsToml;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
@@ -12,11 +13,15 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
+use codex_protocol::models::CdiPermissions;
+use codex_protocol::models::ManagedFileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
@@ -75,6 +80,8 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                             entries: BTreeMap::new(),
                         }),
                         network: None,
+
+                        cdi: None,
                     },
                 )]),
             }),
@@ -449,6 +456,8 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
                     }),
                     filesystem: None,
                     network: None,
+
+                    cdi: None,
                 },
             )]),
         }),
@@ -542,6 +551,48 @@ fn glob_scan_max_depth_must_be_positive() {
 }
 
 #[test]
+fn compile_permission_profile_includes_cdi_devices() -> std::io::Result<()> {
+    let mut startup_warnings = Vec::new();
+
+    let profile = compile_permission_profile_to_runtime_profile(
+        &PermissionsToml {
+            entries: BTreeMap::from([(
+                "gpu".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    extends: None,
+                    workspace_roots: None,
+                    filesystem: None,
+                    network: None,
+                    cdi: Some(CdiPermissionsToml {
+                        devices: Some(vec!["nvidia.com/gpu=*".to_string()]),
+                    }),
+                },
+            )]),
+        },
+        "gpu",
+        &mut startup_warnings,
+    )?;
+
+    assert_eq!(
+        profile,
+        PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: Vec::new(),
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+            cdi: Some(CdiPermissions {
+                devices: vec!["nvidia.com/gpu=*".to_string()],
+                allowed_devices: None,
+                denied_devices: Vec::new(),
+            }),
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
     let mut startup_warnings = Vec::new();
     let (file_system_policy, _) = compile_permission_profile(
@@ -563,6 +614,8 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                         )]),
                     }),
                     network: None,
+
+                    cdi: None,
                 },
             )]),
         },

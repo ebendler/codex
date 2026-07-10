@@ -70,6 +70,9 @@ pub(crate) struct BwrapOptions {
     /// Keep this uncapped by default so existing nested deny-read matches are
     /// masked before the sandboxed command starts.
     pub glob_scan_max_depth: Option<usize>,
+    /// Force bubblewrap even when the filesystem and network policy would
+    /// otherwise allow direct execution.
+    pub force_bwrap: bool,
 }
 
 impl Default for BwrapOptions {
@@ -78,6 +81,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             glob_scan_max_depth: None,
+            force_bwrap: false,
         }
     }
 }
@@ -109,6 +113,27 @@ pub(crate) struct BwrapArgs {
     pub preserved_files: Vec<File>,
     pub synthetic_mount_targets: Vec<SyntheticMountTarget>,
     pub protected_create_targets: Vec<ProtectedCreateTarget>,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub(crate) struct BwrapCdiEdits {
+    pub env: Vec<(String, String)>,
+    pub devices: Vec<BwrapCdiDevice>,
+    pub mounts: Vec<BwrapCdiMount>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct BwrapCdiDevice {
+    pub host_path: PathBuf,
+    pub container_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct BwrapCdiMount {
+    pub host_path: PathBuf,
+    pub container_path: PathBuf,
+    pub read_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,12 +262,19 @@ pub(crate) fn create_bwrap_command_args(
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
+    cdi_edits: &BwrapCdiEdits,
 ) -> Result<BwrapArgs> {
     let unreadable_globs =
         file_system_sandbox_policy.get_unreadable_globs_with_cwd(sandbox_policy_cwd);
     // Full disk write normally skips bwrap, but unreadable glob patterns still
     // need concrete bwrap masks for the matches expanded below.
-    if file_system_sandbox_policy.has_full_disk_write_access() && unreadable_globs.is_empty() {
+    if file_system_sandbox_policy.has_full_disk_write_access()
+        && unreadable_globs.is_empty()
+        && !options.force_bwrap
+        && cdi_edits.env.is_empty()
+        && cdi_edits.devices.is_empty()
+        && cdi_edits.mounts.is_empty()
+    {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
             Ok(BwrapArgs {
                 args: command,
@@ -251,7 +283,7 @@ pub(crate) fn create_bwrap_command_args(
                 protected_create_targets: Vec::new(),
             })
         } else {
-            Ok(create_bwrap_flags_full_filesystem(command, options))
+            create_bwrap_flags_full_filesystem(command, options, cdi_edits)
         };
     }
 
@@ -261,21 +293,33 @@ pub(crate) fn create_bwrap_command_args(
         sandbox_policy_cwd,
         command_cwd,
         options,
+        cdi_edits,
     )
 }
 
-fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
-    let mut args = vec![
-        "--new-session".to_string(),
-        "--die-with-parent".to_string(),
-        "--bind".to_string(),
-        "/".to_string(),
-        "/".to_string(),
-        // Always enter a fresh user namespace so root inside a container does
-        // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
-        "--unshare-user".to_string(),
-        "--unshare-pid".to_string(),
-    ];
+fn create_bwrap_flags_full_filesystem(
+    command: Vec<String>,
+    options: BwrapOptions,
+    cdi_edits: &BwrapCdiEdits,
+) -> Result<BwrapArgs> {
+    let mut bwrap_args = BwrapArgs {
+        args: vec![
+            "--new-session".to_string(),
+            "--die-with-parent".to_string(),
+            "--bind".to_string(),
+            "/".to_string(),
+            "/".to_string(),
+        ],
+        preserved_files: Vec::new(),
+        synthetic_mount_targets: Vec::new(),
+        protected_create_targets: Vec::new(),
+    };
+    append_cdi_args(&mut bwrap_args, cdi_edits)?;
+    // Always enter a fresh user namespace so root inside a container does
+    // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
+    let args = &mut bwrap_args.args;
+    args.push("--unshare-user".to_string());
+    args.push("--unshare-pid".to_string());
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -285,12 +329,7 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
     }
     args.push("--".to_string());
     args.extend(command);
-    BwrapArgs {
-        args,
-        preserved_files: Vec::new(),
-        synthetic_mount_targets: Vec::new(),
-        protected_create_targets: Vec::new(),
-    }
+    Ok(bwrap_args)
 }
 
 /// Build the bubblewrap flags (everything after `argv[0]`).
@@ -300,19 +339,24 @@ fn create_bwrap_flags(
     sandbox_policy_cwd: &Path,
     command_cwd: &Path,
     options: BwrapOptions,
+    cdi_edits: &BwrapCdiEdits,
 ) -> Result<BwrapArgs> {
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
-    } = create_filesystem_args(
-        file_system_sandbox_policy,
-        sandbox_policy_cwd,
-        options
-            .glob_scan_max_depth
-            .or(file_system_sandbox_policy.glob_scan_max_depth),
-    )?;
+    } = {
+        let mut bwrap_args = create_filesystem_args(
+            file_system_sandbox_policy,
+            sandbox_policy_cwd,
+            options
+                .glob_scan_max_depth
+                .or(file_system_sandbox_policy.glob_scan_max_depth),
+        )?;
+        append_cdi_args(&mut bwrap_args, cdi_edits)?;
+        bwrap_args
+    };
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
@@ -998,6 +1042,85 @@ fn normalize_command_cwd_for_bwrap(command_cwd: &Path) -> PathBuf {
         .unwrap_or_else(|_| command_cwd.to_path_buf())
 }
 
+fn append_cdi_args(bwrap_args: &mut BwrapArgs, cdi_edits: &BwrapCdiEdits) -> Result<()> {
+    for (key, value) in &cdi_edits.env {
+        bwrap_args.args.push("--setenv".to_string());
+        bwrap_args.args.push(key.clone());
+        bwrap_args.args.push(value.clone());
+    }
+
+    for device in &cdi_edits.devices {
+        append_cdi_mount_target_args(bwrap_args, &device.host_path, &device.container_path)?;
+        bwrap_args.args.push("--dev-bind".to_string());
+        bwrap_args
+            .args
+            .push(path_to_string(device.host_path.as_path()));
+        bwrap_args
+            .args
+            .push(path_to_string(device.container_path.as_path()));
+    }
+
+    for mount in &cdi_edits.mounts {
+        append_cdi_mount_target_args(bwrap_args, &mount.host_path, &mount.container_path)?;
+        bwrap_args.args.push(if mount.read_only {
+            "--ro-bind".to_string()
+        } else {
+            "--bind".to_string()
+        });
+        bwrap_args
+            .args
+            .push(path_to_string(mount.host_path.as_path()));
+        bwrap_args
+            .args
+            .push(path_to_string(mount.container_path.as_path()));
+    }
+
+    Ok(())
+}
+
+fn append_cdi_mount_target_args(
+    bwrap_args: &mut BwrapArgs,
+    host_path: &Path,
+    container_path: &Path,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(host_path)?;
+    if container_path.exists() {
+        return Ok(());
+    }
+
+    append_missing_cdi_parent_dirs(&mut bwrap_args.args, container_path);
+    if metadata.is_dir() {
+        bwrap_args.args.push("--dir".to_string());
+        bwrap_args.args.push(path_to_string(container_path));
+        bwrap_args
+            .synthetic_mount_targets
+            .push(SyntheticMountTarget::missing_empty_directory(
+                container_path,
+            ));
+    } else {
+        append_missing_empty_file_bind_data_args(bwrap_args, container_path)?;
+    }
+
+    Ok(())
+}
+
+fn append_missing_cdi_parent_dirs(args: &mut Vec<String>, path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let mut missing_parents = parent
+        .ancestors()
+        .take_while(|path| *path != Path::new("/"))
+        .filter(|path| !path.exists())
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    missing_parents.reverse();
+    for parent in missing_parents {
+        args.push("--dir".to_string());
+        args.push(path_to_string(parent.as_path()));
+    }
+}
+
 fn append_mount_target_parent_dir_args(args: &mut Vec<String>, mount_target: &Path, anchor: &Path) {
     let mount_target_dir = if mount_target.is_dir() {
         mount_target
@@ -1370,6 +1493,7 @@ mod tests {
                 network_mode: BwrapNetworkMode::FullAccess,
                 ..Default::default()
             },
+            &BwrapCdiEdits::default(),
         )
         .expect("create bwrap args");
 
@@ -1389,6 +1513,7 @@ mod tests {
                 network_mode: BwrapNetworkMode::ProxyOnly,
                 ..Default::default()
             },
+            &BwrapCdiEdits::default(),
         )
         .expect("create bwrap args");
 
@@ -1407,6 +1532,71 @@ mod tests {
                 "/proc".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn bwrap_args_include_cdi_env_device_and_ro_bind_mount() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let host_device = temp_dir.path().join("nvidia0");
+        let host_mount = temp_dir.path().join("libcuda.so");
+        let container_device = temp_dir.path().join("sandbox-dev").join("nvidia0");
+        let container_mount = temp_dir.path().join("sandbox-lib").join("libcuda.so");
+        std::fs::write(&host_device, "").expect("write host device placeholder");
+        std::fs::write(&host_mount, "").expect("write host mount placeholder");
+        let cdi = BwrapCdiEdits {
+            env: vec![("NVIDIA_VISIBLE_DEVICES".to_string(), "0".to_string())],
+            devices: vec![BwrapCdiDevice {
+                host_path: host_device.clone(),
+                container_path: container_device.clone(),
+            }],
+            mounts: vec![BwrapCdiMount {
+                host_path: host_mount.clone(),
+                container_path: container_mount.clone(),
+                read_only: true,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &FileSystemSandboxPolicy::unrestricted(),
+            temp_dir.path(),
+            temp_dir.path(),
+            BwrapOptions {
+                force_bwrap: true,
+                ..Default::default()
+            },
+            &cdi,
+        )
+        .expect("create bwrap args");
+
+        let host_device = path_to_string(&host_device);
+        let container_device = path_to_string(&container_device);
+        let host_mount = path_to_string(&host_mount);
+        let container_mount = path_to_string(&container_mount);
+        assert!(
+            args.args
+                .windows(3)
+                .any(|window| window == ["--setenv", "NVIDIA_VISIBLE_DEVICES", "0"])
+        );
+        assert!(args.args.windows(3).any(|window| {
+            window
+                == [
+                    "--dev-bind",
+                    host_device.as_str(),
+                    container_device.as_str(),
+                ]
+        }));
+        assert!(args.args.windows(3).any(|window| {
+            window == ["--ro-bind", host_mount.as_str(), container_mount.as_str()]
+        }));
+        assert_eq!(
+            synthetic_mount_target_paths(&args),
+            vec![
+                PathBuf::from(container_device),
+                PathBuf::from(container_mount)
             ]
         );
     }
@@ -1437,6 +1627,7 @@ mod tests {
             temp_dir.path(),
             temp_dir.path(),
             BwrapOptions::default(),
+            &BwrapCdiEdits::default(),
         )
         .expect("create bwrap args");
 
@@ -1485,6 +1676,7 @@ mod tests {
             sandbox_policy_cwd.as_path(),
             &command_cwd,
             BwrapOptions::default(),
+            &BwrapCdiEdits::default(),
         )
         .expect("create bwrap args");
         let canonical_sandbox_cwd = path_to_string(
